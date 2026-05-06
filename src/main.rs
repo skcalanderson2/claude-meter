@@ -1,6 +1,6 @@
 mod data;
 
-use data::{compute_app_data, load_history_timestamps, AppData};
+use data::{compute_app_data, AppData};
 use iced::{
     alignment,
     mouse,
@@ -15,7 +15,7 @@ use std::time::Duration;
 const START_ANGLE: f32 = 5.0 * PI / 6.0;
 const TOTAL_SWEEP: f32 = 4.0 * PI / 3.0;
 
-const SESSION_CAP: f32 = 200_000.0;
+const SESSION_CAP: f32 = 1_800_000.0;
 const WEEKLY_CAP: f32 = 1_800_000.0;
 
 const COLOR_BG: Color = Color { r: 0.051, g: 0.051, b: 0.051, a: 1.0 };
@@ -30,7 +30,6 @@ const COLOR_DIM: Color = Color { r: 0.45, g: 0.45, b: 0.45, a: 1.0 };
 const GRADIENT_SEGS: usize = 120;
 
 struct ClaudeMeter {
-    timestamps: Vec<u64>,
     data: AppData,
     cache: Cache,
     dot_visible: bool,
@@ -47,10 +46,9 @@ enum Message {
 
 impl Default for ClaudeMeter {
     fn default() -> Self {
-        let timestamps = load_history_timestamps();
-        let data = compute_app_data(&timestamps);
+        let data = compute_app_data();
         let displayed_frac = (data.tokens_session as f32 / SESSION_CAP).min(1.0);
-        Self { timestamps, data, cache: Cache::default(), dot_visible: false, displayed_frac }
+        Self { data, cache: Cache::default(), dot_visible: false, displayed_frac }
     }
 }
 
@@ -61,18 +59,8 @@ impl ClaudeMeter {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Tick => {
-                self.data = compute_app_data(&self.timestamps);
-                self.dot_visible = true;
-                self.cache.clear();
-                Task::perform(
-                    tokio::time::sleep(Duration::from_millis(400)),
-                    |_| Message::DotOff,
-                )
-            }
-            Message::Reload => {
-                self.timestamps = load_history_timestamps();
-                self.data = compute_app_data(&self.timestamps);
+            Message::Tick | Message::Reload => {
+                self.data = compute_app_data();
                 self.dot_visible = true;
                 self.cache.clear();
                 Task::perform(
