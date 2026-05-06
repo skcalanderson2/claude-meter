@@ -117,7 +117,13 @@ fn load_session_metas() -> Vec<SessionMeta> {
         .collect()
 }
 
-fn sum_session_tokens(cwd: &str, session_id: &str) -> u64 {
+/// Sum tokens from a session JSONL, counting only entries with timestamp >= window_start_ms.
+/// If window_start_ms is None (no active window), returns 0.
+fn sum_session_tokens(cwd: &str, session_id: &str, window_start_ms: Option<u64>) -> u64 {
+    let after = match window_start_ms {
+        Some(t) => t,
+        None => return 0,
+    };
     let cwd_encoded = cwd.replace('/', "-").replace('_', "-");
     let path = home_dir()
         .join(".claude/projects")
@@ -130,6 +136,11 @@ fn sum_session_tokens(cwd: &str, session_id: &str) -> u64 {
     for line in reader.lines().map_while(Result::ok) {
         if line.trim().is_empty() { continue }
         let Ok(entry) = serde_json::from_str::<JournalEntry>(&line) else { continue };
+        // Skip entries with no timestamp or timestamp before window start
+        match entry.timestamp.as_ref().and_then(parse_ts) {
+            Some(ts) if ts >= after => {}
+            _ => continue,
+        }
         if let Some(usage) = entry.message.and_then(|m| m.usage) {
             total += usage.input_tokens + usage.output_tokens;
         }
@@ -224,9 +235,22 @@ pub fn compute_app_data(history_timestamps: &[u64]) -> AppData {
 
     let sessions = load_session_metas();
 
+    // 5-hour window: find oldest history timestamp within the window
+    let cutoff = now.saturating_sub(WINDOW_MS);
+    let window_start_ms = history_timestamps
+        .iter()
+        .filter(|&&ts| ts >= cutoff)
+        .min()
+        .copied();
+
+    let remaining_secs = window_start_ms
+        .map(|min_ts| ((min_ts + WINDOW_MS).saturating_sub(now) / 1000).min(5 * 3600))
+        .unwrap_or(5 * 3600);
+
+    // Session tokens = only tokens with timestamp >= window start (resets with the rate-limit window)
     let current = sessions.iter().max_by_key(|s| s.updated_at);
     let tokens_session = current
-        .map(|s| sum_session_tokens(&s.cwd, &s.session_id))
+        .map(|s| sum_session_tokens(&s.cwd, &s.session_id, window_start_ms))
         .unwrap_or(0);
 
     let scan = scan_all_project_jsonl();
@@ -236,14 +260,6 @@ pub fn compute_app_data(history_timestamps: &[u64]) -> AppData {
         .filter(|(first_ts, _)| *first_ts >= cutoff_week)
         .map(|(_, tokens)| tokens)
         .sum();
-
-    let cutoff = now.saturating_sub(WINDOW_MS);
-    let remaining_secs = history_timestamps
-        .iter()
-        .filter(|&&ts| ts >= cutoff)
-        .min()
-        .map(|&min_ts| ((min_ts + WINDOW_MS).saturating_sub(now) / 1000).min(5 * 3600))
-        .unwrap_or(5 * 3600);
 
     AppData { tokens_session, tokens_this_week, remaining_secs, daily_tokens: scan.daily }
 }
