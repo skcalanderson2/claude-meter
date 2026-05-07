@@ -34,6 +34,8 @@ struct ClaudeMeter {
     cache: Cache,
     dot_visible: bool,
     displayed_frac: f32, // animated, interpolates toward target each frame
+    window_start_ms: Option<u64>,
+    peak_session_tokens: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -46,9 +48,10 @@ enum Message {
 
 impl Default for ClaudeMeter {
     fn default() -> Self {
-        let data = compute_app_data();
+        let (data, window_start_ms) = compute_app_data(None);
+        let peak_session_tokens = data.tokens_session;
         let displayed_frac = (data.tokens_session as f32 / SESSION_CAP).min(1.0);
-        Self { data, cache: Cache::default(), dot_visible: false, displayed_frac }
+        Self { data, cache: Cache::default(), dot_visible: false, displayed_frac, window_start_ms, peak_session_tokens }
     }
 }
 
@@ -60,7 +63,16 @@ impl ClaudeMeter {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Tick | Message::Reload => {
-                self.data = compute_app_data();
+                let (mut data, ws) = compute_app_data(self.window_start_ms);
+                // Within a valid window, count can only go up.
+                // Reset peak only when the anchor changes (window expired + new one started).
+                let same_window = ws.is_some() && ws == self.window_start_ms;
+                if same_window {
+                    data.tokens_session = data.tokens_session.max(self.peak_session_tokens);
+                }
+                self.peak_session_tokens = data.tokens_session;
+                self.data = data;
+                self.window_start_ms = ws;
                 self.dot_visible = true;
                 self.cache.clear();
                 Task::perform(

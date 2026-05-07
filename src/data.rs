@@ -177,15 +177,28 @@ fn scan_all_project_jsonl(now: u64, window_cutoff: u64) -> ScanResult {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-pub fn compute_app_data() -> AppData {
+/// `prev_window_start`: persisted anchor from last call (None on first call).
+/// Returns `(AppData, new_window_start)`.
+/// Anchor only advances when the old window has fully expired; within a live
+/// window the cutoff is fixed so token counts can only go up.
+pub fn compute_app_data(prev_window_start: Option<u64>) -> (AppData, Option<u64>) {
     let now = now_ms();
     const WEEK_MS: u64 = 7 * 86_400_000;
     const WINDOW_MS: u64 = 5 * 3_600_000;
 
-    let window_cutoff = now.saturating_sub(WINDOW_MS);
+    // Use the persisted anchor if it's still within the 5-hour window;
+    // otherwise fall back to the rolling `now - 5h` for fresh discovery.
+    let window_cutoff = match prev_window_start {
+        Some(ws) if ws + WINDOW_MS > now => ws,
+        _ => now.saturating_sub(WINDOW_MS),
+    };
+
     let scan = scan_all_project_jsonl(now, window_cutoff);
 
     let tokens_session = scan.window_tokens;
+
+    // New anchor = oldest entry actually seen in this window (monotone).
+    let new_window_start = scan.window_oldest_ts.or(prev_window_start);
 
     let remaining_secs = scan.window_oldest_ts
         .map(|oldest| ((oldest + WINDOW_MS).saturating_sub(now) / 1000).min(5 * 3600))
@@ -197,5 +210,5 @@ pub fn compute_app_data() -> AppData {
         .map(|(_, tokens)| tokens)
         .sum();
 
-    AppData { tokens_session, tokens_this_week, remaining_secs, daily_tokens: scan.daily }
+    (AppData { tokens_session, tokens_this_week, remaining_secs, daily_tokens: scan.daily }, new_window_start)
 }
