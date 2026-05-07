@@ -6,13 +6,15 @@ A macOS desktop app that shows your [Claude Code](https://claude.ai/code) token 
 
 ## Features
 
-- **Session arc** — animated gauge showing tokens used in the current session (200k cap), with a smooth green → yellow → red gradient
+- **Session arc** — animated gauge showing tokens used in the current 5-hour window (1.8M cap), with a smooth green → yellow → red gradient
 - **Until Reset** — absolute local time when the 5-hour rate-limit window resets
 - **Weekly Tokens** — percentage of the weekly token budget used across all projects (1.8M cap)
 - **7-day sparkline** — daily token usage bar chart for the past week
 - **Live updates** — refreshes every 2 seconds; heartbeat dot pulses on each tick
 
 All data is read directly from `~/.claude/` — no network calls, no API keys.
+
+Built with [iced](https://github.com/iced-rs/iced), a cross-platform GUI crate for Rust.
 
 ## Requirements
 
@@ -51,8 +53,14 @@ Then launch from Spotlight, Launchpad, or:
 open ~/Applications/"Claude Meter.app"
 ```
 
+To build a distributable `.pkg` installer:
+
+```bash
+bash make-installer.sh
+```
+
 ## How It Works
 
 Claude Code writes conversation history to `~/.claude/projects/<project>/<session>.jsonl`. Each assistant message contains a `usage` object with `input_tokens` and `output_tokens`. Claude Meter scans all JSONL files on every refresh to compute session and weekly totals.
 
-The 5-hour reset countdown is derived from `~/.claude/history.jsonl`, which records the timestamp of every prompt submitted.
+The 5-hour reset countdown is derived from the oldest message timestamp found within the current rolling window across all project JSONL files. The window anchor is persisted across ticks so the session token count only goes up — it never drops mid-session.
